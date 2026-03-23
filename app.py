@@ -108,56 +108,38 @@ with tabs[1]:
     st.subheader("🍽 Dinner Decision")
     if st.button("Calculate Dinner Winner"):
         scores = {}
-        # Combine votes
         joy_v = data["daily_inputs"].get("Joy", {}).get("votes", {})
         marcy_v = data["daily_inputs"].get("Marcy", {}).get("votes", {})
         
+        # 1. Calculate Standard Categories
         for cat in CATEGORIES:
             total_v = joy_v.get(cat, 0) + marcy_v.get(cat, 0)
             scores[cat] = total_v * data["multipliers"].get(cat, 1.0)
             
-        winner = max(scores, key=scores.get)
-        st.info(f"The Winner is: **{winner.upper()}**")
-        
-        # Multiplier Logic (Linear +0.1)
-        for cat in CATEGORIES:
-            if cat == winner:
-                data["multipliers"][cat] = 1.0
-            else:
-                data["multipliers"][cat] += 0.1
-        save_data(data)
+        # 2. Calculate "Other" if points were given
+        # We check both Joy and Marcy's 'other' inputs from the data
+        # (Simplified: assumes you both vote for the same 'Other' if one is provided)
+        current_other = st.session_state.get("last_other_name") # You'd set this in Tab 1
+        if current_other:
+            other_v = joy_v.get("Other", 0) + marcy_v.get("Other", 0)
+            scores[f"Other: {current_other}"] = other_v * data["other_multipliers"].get(current_other, 1.0)
 
-    # AUTO-PULL APPOINTMENTS
-    tmw_appts = [a for a in data["appointments"] if a["date"] == tomorrow]
-    
-    col_j, col_m = st.columns(2)
-    with col_j:
-        st.markdown("### 🌸 Joy")
-        j = data["daily_inputs"].get("Joy", {})
-        if j:
-            color = "red" if j.get("intensity", 0) > 7 else "green"
-            st.markdown(f"**Intensity:** :{color}[{j.get('intensity', 'N/A')}/10]")
-            st.write(f"**Work:** {j.get('work')}")
-            st.write(f"**Meetings:** {j.get('mtg')}")
-            st.write(f"**Needs from Marcy:** {j.get('need')}")
-        
-        st.write("**Appointments:**")
-        for a in tmw_appts:
-            if a["owner"] in ["Joy", "Both"]: st.write(f"- {a['desc']}")
-
-    with col_m:
-        st.markdown("### ⚡ Marcy")
-        m = data["daily_inputs"].get("Marcy", {})
-        if m:
-            st.write(f"**Gym:** {m.get('gym')}")
-            st.write(f"**Cycling:** {m.get('cycle')}")
-            st.write(f"**Tasks:** {m.get('tasks')}")
-            st.write(f"**Needs from Joy:** {m.get('need')}")
-
-        st.write("**Appointments:**")
-        for a in tmw_appts:
-            if a["owner"] in ["Marcy", "Both"]: st.write(f"- {a['desc']}")
-
+        if scores:
+            winner = max(scores, key=scores.get)
+            st.balloons()
+            st.info(f"The Winner is: **{winner.upper()}**")
+            
+            # 3. Update Multipliers
+            # Reset winner to 1.0, increment all others (Standard + Known Others)
+            for cat in data["multipliers"]:
+                if cat == winner: data["multipliers"][cat] = 1.0
+                else: data["multipliers"][cat] += 0.1
+                
+            for oth in data["other_multipliers"]:
+                if f"Other: {oth}" == winner: data["other_multipliers"][oth] = 1.0
+                else: data["other_multipliers"][oth] += 0.1
+            
+            save_data(data)
 # --- TAB 3: FUTURE PLANNER ---
 with tabs[2]:
     st.header("🗓 Future Appointments")
