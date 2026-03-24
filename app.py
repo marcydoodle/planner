@@ -31,13 +31,11 @@ def save_data(d):
 st.cache_data.clear()
 data = load_data()
 now_dt = get_local_now()
-today_str = "2026-03-24" # Hardcoded to match your current day
-yesterday_str = (datetime.strptime(today_str, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
-tomorrow_str = (datetime.strptime(today_str, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+today_str = "2026-03-24" # Hardcoded today
+tomorrow_str = "2026-03-25"
 
 # --- FORCE THE WINNER FOR TODAY ---
 if today_str not in data["history"]: data["history"][today_str] = {}
-# Placing winner in today's key directly to ensure it shows up
 data["history"][today_str]["dinner_winner"] = "Mexican"
 
 st.set_page_config(page_title="Joy & Marcy Sync", layout="wide")
@@ -45,20 +43,17 @@ st.title("🌙 The Daily Sync")
 
 tabs = st.tabs(["📅 Today's Plan", "📋 Tomorrow's Rundown", "📝 Nightly Input", "🗓 Future Planner", "🛒 Groceries"])
 
-def render_rundown(date_key, label, is_today=False):
-    current_data = load_data()
-    day_data = current_data["history"].get(date_key, {})
-    day_appts = [a for a in current_data["appointments"] if str(a.get('date')) == date_key]
+def render_rundown(date_key, label):
+    # Pull fresh data
+    fresh_d = load_data()
+    day_data = fresh_d["history"].get(date_key, {})
+    day_appts = [a for a in fresh_d["appointments"] if str(a.get('date')) == date_key]
     
-    # 1. WINNER AT THE VERY TOP OF THE TAB
+    # 1. WINNER AT THE ABSOLUTE TOP (Using a blue banner for visibility)
     winner = day_data.get("dinner_winner")
     if winner:
-        st.markdown(f"""
-            <div style="background-color:#2e7bcf;padding:15px;border-radius:10px;text-align:center;">
-                <h2 style="color:white;margin:0;">🍴 TONIGHT'S DINNER: {winner.upper()}</h2>
-            </div>
-            <br>
-        """, unsafe_allow_html=True)
+        st.info(f"### 🍴 Tonight's Dinner: {winner.upper()}")
+        st.divider()
 
     st.header(f"{label}: {date_key}")
     
@@ -86,7 +81,7 @@ def render_rundown(date_key, label, is_today=False):
 
             with st.expander("🌆 After Work & Evening", expanded=True):
                 st.write(f"**Plan:** {u.get('after', 'TBD')}")
-                st.write(f"**Reminders:** {u.get('reminders', 'None')}")
+                st.write(f"**Don't Forget:** {u.get('reminders', 'None')}")
 
             with st.container(border=True):
                 st.write("**🤝 Partnership & Needs**")
@@ -95,12 +90,12 @@ def render_rundown(date_key, label, is_today=False):
 
 # --- TAB LOGIC ---
 with tabs[0]:
-    render_rundown(today_str, "Today", is_today=True)
+    render_rundown(today_str, "Today")
 
 with tabs[1]:
-    render_rundown(tomorrow_str, "Tomorrow", is_today=False)
+    render_rundown(tomorrow_str, "Tomorrow")
     if st.button("🏆 Decide Tomorrow's Dinner"):
-        # Logic to decide winner for tomorrow based on votes
+        # This button calculates the winner for the tomorrow_str key
         fresh_d = load_data()
         j_v = fresh_d["history"].get(tomorrow_str, {}).get("Joy", {}).get("votes", {})
         m_v = fresh_d["history"].get(tomorrow_str, {}).get("Marcy", {}).get("votes", {})
@@ -109,14 +104,15 @@ with tabs[1]:
             win = max(scores, key=scores.get)
             if tomorrow_str not in fresh_d["history"]: fresh_d["history"][tomorrow_str] = {}
             fresh_d["history"][tomorrow_str]["dinner_winner"] = win
+            # Adjust multipliers for future variety
             for c in CATEGORIES: fresh_d["multipliers"][c] = 1.0 if c == win else fresh_d["multipliers"][c] + 0.1
             save_data(fresh_d); st.rerun()
 
 with tabs[2]:
     st.header("Nightly Sync")
-    target_date = st.date_input("Planning for:", value=now_dt.date() + timedelta(days=1))
+    target_date = st.date_input("Planning for:", value=get_local_now().date() + timedelta(days=1))
     t_key = target_date.strftime("%Y-%m-%d")
-    user = st.radio("User", ["Joy", "Marcy"], horizontal=True)
+    user = st.radio("Who are you?", ["Joy", "Marcy"], horizontal=True)
     
     with st.form("input_form"):
         st.subheader("🌅 Daytime")
@@ -129,19 +125,37 @@ with tabs[2]:
         v_cols = st.columns(4)
         v_res = {c: v_cols[i % 4].number_input(c, 0, 10, 0) for i, c in enumerate(CATEGORIES)}
 
-        if st.form_submit_button("Submit"):
+        if st.form_submit_button("Submit Sync"):
             d_up = load_data()
             if t_key not in d_up["history"]: d_up["history"][t_key] = {}
             e = {"energy": nrg, "after": aft, "reminders": rem, "need": nd, "votes": v_res}
             if user == "Joy": e.update({"work": w_t, "mtg": w_m, "intensity": w_i})
             else: e.update({"gym": gym, "cycle": cyc, "tasks": tsk})
             d_up["history"][t_key][user] = e
-            save_data(d_up); st.success(f"Saved!"); st.rerun()
+            save_data(d_up); st.success(f"Saved for {t_key}"); st.rerun()
 
 with tabs[3]:
-    st.header("🗓 Planner")
-    # ... Planner logic remains the same ...
+    st.header("🗓 Future Planner")
+    with st.expander("Add Event"):
+        d, o, desc = st.date_input("Date"), st.selectbox("Who?", ["Joy", "Marcy", "Both"]), st.text_input("What?")
+        if st.button("Save Event"):
+            d_save = load_data()
+            d_save["appointments"].append({"date": str(d), "owner": o, "desc": desc})
+            save_data(d_save); st.rerun()
+    if data["appointments"]:
+        st.table(pd.DataFrame(data["appointments"]).sort_values("date"))
 
 with tabs[4]:
     st.header("🛒 Groceries")
-    # ... Grocery logic remains the same ...
+    now_g = get_local_now()
+    upd_g = []
+    for i, g in enumerate(data["groceries"]):
+        if g["checked"] and g["time"] and (now_g - datetime.fromisoformat(g["time"]) > timedelta(hours=24)): continue
+        c1, c2 = st.columns([1, 9])
+        chk = c1.checkbox("", value=g["checked"], key=f"gr_{i}")
+        if chk and not g["checked"]: g["checked"], g["time"] = True, now_g.isoformat()
+        elif not chk: g["checked"], g["time"] = False, None
+        c2.write(f"~~{g['item']}~~" if chk else g['item'])
+        upd_g.append(g)
+    data["groceries"] = upd_g
+    if st.button("Sync List"): save_data(data); st.rerun()
