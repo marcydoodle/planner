@@ -27,27 +27,17 @@ def save_data(d):
     with open(DATA_FILE, "w") as f:
         json.dump(d, f)
 
-# --- INITIALIZE & HARDCODE FIX FOR MARCH 24 ---
+# --- INITIALIZE & RESET OVERLAP ---
 data = load_data()
 today_str = "2026-03-24"
 tomorrow_str = "2026-03-25"
 
-# If today is blank, force-inject the data I saw in your screenshots
-if today_str not in data["history"] or not data["history"][today_str].get("Joy"):
-    data["history"][today_str] = {
-        "Joy": {
-            "work": "9-5pm", "intensity": 7, "mtg": "None", "energy": 9,
-            "after": "Visit the storage unit to gain access and take a view boxes. Put together the dresser if it gets delivered and there is time/desire.",
-            "reminders": "None", "need": "Help me move stuff around to preview where the table will be."
-        },
-        "Marcy": {
-            "gym": "Light, high volume leg day around 8-9", "energy": 10,
-            "cycle": "20 miles moderate biking with some climbs but not intense, 1 hour",
-            "tasks": "Organize transcripts, reach out for letters of recommendation, tryhackme, code academy, newsletter",
-            "after": "Mario 64", "reminders": "Swag", "need": "One new thought or memory that I don't know and a head rub"
-        }
-    }
-    save_data(data)
+# FIX: If Tomorrow's tab is accidentally holding a copy of Today's plan, wipe Tomorrow
+if today_str in data["history"] and tomorrow_str in data["history"]:
+    # If the plans are identical, the sync was likely mislabeled
+    if data["history"][today_str] == data["history"][tomorrow_str]:
+        del data["history"][tomorrow_str]
+        save_data(data)
 
 st.set_page_config(page_title="Joy & Marcy Sync", layout="wide")
 st.title("🌙 The Daily Sync")
@@ -55,19 +45,17 @@ st.title("🌙 The Daily Sync")
 tabs = st.tabs(["📅 Today", "📋 Tomorrow", "📝 Input", "🗓 Planner", "🛒 Groceries"])
 
 def render_rundown(date_key, label):
-    """Standard, non-smart rendering."""
     day_data = data["history"].get(date_key, {})
-    # Fixed Planner Logic
     day_appts = [a for a in data["appointments"] if str(a.get('date')) == date_key]
     
     st.header(f"{label}: {date_key}")
     
     if not day_data and not day_appts:
-        st.info(f"No sync for {date_key}")
+        st.info(f"No sync recorded for {date_key}. Use the 'Input' tab to plan ahead!")
         return
 
-    c1, c2 = st.columns(2)
-    for name, col in zip(["Joy", "Marcy"], [c1, c2]):
+    c1, col_m = st.columns(2)
+    for name, col in zip(["Joy", "Marcy"], [c1, col_m]):
         with col:
             st.subheader(f"{'🌸' if name == 'Joy' else '⚡'} {name}")
             u = day_data.get(name, {})
@@ -80,7 +68,6 @@ def render_rundown(date_key, label):
                     st.write(f"**Gym:** {u.get('gym', 'Rest')} | **Cycling:** {u.get('cycle', 'No')}")
                     st.info(f"**Tasks:** {u.get('tasks', 'None')}")
                 
-                # Render Appts
                 for a in [a['desc'] for a in day_appts if a['owner'] in [name, "Both"]]:
                     st.error(f"⚠️ **Appt:** {a}")
 
@@ -103,9 +90,10 @@ with tabs[1]:
 # --- TAB 3: INPUT ---
 with tabs[2]:
     st.header("Nightly Sync")
-    target_date = st.date_input("Planning for:", value=get_local_now() + timedelta(days=1))
+    # Forces the input to look at the 'correct' Tomorrow (Wednesday)
+    target_date = st.date_input("Planning for:", value=get_local_now().date() + timedelta(days=1))
     t_key = target_date.strftime("%Y-%m-%d")
-    user = st.radio("User", ["Joy", "Marcy"], horizontal=True)
+    user = st.radio("Who are you?", ["Joy", "Marcy"], horizontal=True)
     
     with st.form("input_form"):
         st.subheader("🌅 Daytime")
@@ -121,21 +109,17 @@ with tabs[2]:
         nrg, nd = st.select_slider("Energy", range(0, 11), 5), st.text_area("Need")
         
         st.subheader("🍕 Dinner")
-        g_in = st.text_input("Groceries")
         v_cols = st.columns(4)
         v_res = {c: v_cols[i % 4].number_input(c, 0, 10, 0) for i, c in enumerate(CATEGORIES)}
 
-        if st.form_submit_button("Submit"):
+        if st.form_submit_button("Submit Sync"):
             d_up = load_data()
             if t_key not in d_up["history"]: d_up["history"][t_key] = {}
             e = {"energy": nrg, "after": aft, "reminders": rem, "need": nd, "votes": v_res}
             if user == "Joy": e.update({"work": w_t, "mtg": w_m, "intensity": w_i})
             else: e.update({"gym": gym, "cycle": cyc, "tasks": tsk})
             d_up["history"][t_key][user] = e
-            if g_in:
-                for i in g_in.split(","):
-                    if i.strip(): d_up["groceries"].append({"item": i.strip(), "checked": False, "time": None})
-            save_data(d_up); st.success(f"Saved to {t_key}"); st.rerun()
+            save_data(d_up); st.success(f"Saved for {t_key}"); st.rerun()
 
 # --- TAB 4 & 5 ---
 with tabs[3]:
@@ -147,6 +131,7 @@ with tabs[3]:
             d_save["appointments"].append({"date": str(d), "owner": o, "desc": desc})
             save_data(d_save); st.rerun()
     if data["appointments"]:
+        # Filter logic remains stable
         st.table(pd.DataFrame(data["appointments"]).sort_values("date"))
 
 with tabs[4]:
@@ -162,4 +147,4 @@ with tabs[4]:
         c2.write(f"~~{g['item']}~~" if chk else g['item'])
         upd_g.append(g)
     data["groceries"] = upd_g
-    if st.button("Sync"): save_data(data); st.rerun()
+    if st.button("Sync List"): save_data(data); st.rerun()
