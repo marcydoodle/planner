@@ -17,11 +17,8 @@ def load_data():
         with open(DATA_FILE, "r") as f:
             try:
                 d = json.load(f)
-                if "weights" not in d:
-                    d["weights"] = {"Joy": {c: 1.0 for c in CATEGORIES}, "Marcy": {c: 1.0 for c in CATEGORIES}}
-                if "history" not in d: d["history"] = {}
-                if "groceries" not in d: d["groceries"] = []
-                if "appointments" not in d: d["appointments"] = []
+                for k in ["history", "weights", "groceries", "appointments"]:
+                    if k not in d: d[k] = {} if k in ["history", "weights"] else []
                 return d
             except: pass
     return {
@@ -65,6 +62,8 @@ def render_rundown(date_key, label):
         with col:
             st.subheader(f"{'🌸' if name == 'Joy' else '⚡'} {name}")
             u = day_data.get(name, {})
+            
+            # 1. DAYTIME BLOCK
             with st.expander("🌅 Morning & Daytime", expanded=True):
                 if name == "Joy":
                     st.write(f"**Work:** {u.get('work', '---')} (Int: {u.get('intensity', '5')}/10)")
@@ -74,18 +73,27 @@ def render_rundown(date_key, label):
                     st.info(f"**Tasks:** {u.get('tasks', 'None')}")
                 for a in [a['desc'] for a in day_appts if a['owner'] in [name, "Both"]]:
                     st.error(f"⚠️ **Scheduled:** {a}")
+            
+            # 2. EVENING BLOCK
             with st.expander("🌆 After Work & Evening", expanded=True):
                 st.write(f"**Plan:** {u.get('after', 'TBD')}")
                 st.write(f"**Don't Forget:** {u.get('reminders', 'None')}")
+            
+            # 3. ENERGY STATUS (Separate)
+            energy = u.get('energy', '5')
+            color = "green" if int(energy) > 7 else "orange" if int(energy) > 4 else "red"
+            st.markdown(f"**Current Energy:** :{color}[{energy}/10]")
+
+            # 4. PARTNERSHIP BLOCK (Request Only)
             with st.container(border=True):
                 st.write("### 🤝 What we need from each other")
-                energy = u.get('energy', '5')
-                color = "green" if int(energy) > 7 else "orange" if int(energy) > 4 else "red"
-                st.markdown(f"**{name}'s Energy Level:** :{color}[{energy}/10]")
-                if u.get("need"):
-                    st.chat_message("user").write(f"**{name}'s Request:** {u.get('need')}")
+                req = u.get("need")
+                if req:
+                    st.chat_message("user").write(f"**{name}'s Request:** {req}")
+                else:
+                    st.caption("No specific request listed.")
 
-# --- TABS ---
+# --- TAB LOGIC ---
 with tabs[0]: render_rundown(today_str, "Today")
 with tabs[1]: render_rundown(tomorrow_str, "Tomorrow")
 
@@ -96,73 +104,71 @@ with tabs[2]:
     user = st.radio("Who are you?", ["Joy", "Marcy"], horizontal=True)
     
     with st.form("input_form"):
-        # Section 1: Logistics
-        st.subheader("📋 The Essentials")
+        st.subheader("📋 Essentials")
         if user == "Joy":
             w_t, w_i, w_m = st.text_input("Work"), st.select_slider("Intensity", range(1, 11), 5), st.text_area("Meetings")
         else:
             gym, cyc, tsk = st.text_input("Gym"), st.text_input("Cycling"), st.text_area("Tasks")
         aft, rem = st.text_input("Evening Plan"), st.text_area("Reminders")
         
-        # Section 2: Partnership & Support
-        st.subheader("🤝 What we need from each other")
+        st.subheader("🤝 Support")
         nrg = st.select_slider("Energy Level", range(0, 11), 5)
         nd = st.text_area("What do you need from your partner tomorrow?")
         
-        # CRITICAL FIX: Grocery Input is now clearly defined in the form
-        st.subheader("🛒 Grocery List")
-        g_add_items = st.text_input("Add items to shopping list (e.g. Milk, Bread, Coffee)")
+        st.subheader("🛒 Shopping")
+        g_add = st.text_input("Add Items to Grocery List (Milk, Bread, etc.)")
         
-        # Section 3: Dinner
-        st.subheader("🍕 Dinner Votes")
+        st.subheader("🍕 Dinner")
         v_cols = st.columns(4)
         v_res = {c: v_cols[i % 4].number_input(c, 0, 10, 0) for i, c in enumerate(CATEGORIES)}
         
-        if st.form_submit_button("Submit Nightly Sync"):
-            # Load fresh to ensure we don't wipe concurrent updates
+        if st.form_submit_button("Submit Sync"):
             d_up = load_data()
-            
-            # 1. Update History
             if t_key not in d_up["history"]: d_up["history"][t_key] = {}
+            
+            # Save User Data
             entry = {"energy": nrg, "after": aft, "reminders": rem, "need": nd, "votes": v_res}
             if user == "Joy": entry.update({"work": w_t, "mtg": w_m, "intensity": w_i})
             else: entry.update({"gym": gym, "cycle": cyc, "tasks": tsk})
             d_up["history"][t_key][user] = entry
             
-            # 2. Update Groceries (Split by commas)
-            if g_add_items:
-                items = [i.strip() for i in g_add_items.split(",") if i.strip()]
-                for item in items:
+            # Save Groceries
+            if g_add:
+                for item in [i.strip() for i in g_add.split(",") if i.strip()]:
                     d_up["groceries"].append({"item": item, "checked": False, "time": None})
             
-            save_data(d_up)
-            st.success(f"Successfully saved for {t_key}! Groceries updated.")
-            st.rerun()
+            save_data(d_up); st.success("Saved!"); st.rerun()
 
 with tabs[3]:
-    st.header("📊 Personal Meal Weights")
-    display_data = [{"Category": c, "Joy's Weight": f"{data['weights']['Joy'].get(c, 1.0):.2f}x", "Marcy's Weight": f"{data['weights']['Marcy'].get(c, 1.0):.2f}x"} for c in CATEGORIES]
+    st.header("📊 Weights")
+    display_data = [{"Category": c, "Joy": f"{data['weights']['Joy'].get(c, 1.0):.2f}x", "Marcy": f"{data['weights']['Marcy'].get(c, 1.0):.2f}x"} for c in CATEGORIES]
     st.table(pd.DataFrame(display_data))
-
-with tabs[4]:
-    st.header("🗓 Future Planner")
-    # Planner logic remains same
-    if data["appointments"]:
-        st.table(pd.DataFrame(data["appointments"]).sort_values("date"))
 
 with tabs[5]:
     st.header("🛒 Groceries")
     now_g = get_local_now()
-    upd_g = []
-    for i, g in enumerate(data["groceries"]):
-        if g["checked"] and g["time"] and (now_g - datetime.fromisoformat(g["time"]) > timedelta(hours=24)): continue
-        c1, c2 = st.columns([1, 9])
-        chk = c1.checkbox("", value=g["checked"], key=f"gr_{i}")
-        if chk and not g["checked"]: g["checked"], g["time"] = True, now_g.isoformat()
-        elif not chk: g["checked"], g["time"] = False, None
-        c2.write(f"~~{g['item']}~~" if chk else g['item'])
-        upd_g.append(g)
+    new_groceries = []
     
-    if st.button("Clear Checked Items"): 
-        data["groceries"] = upd_g
+    for i, g in enumerate(data["groceries"]):
+        if g["checked"] and g["time"] and (now_g - datetime.fromisoformat(g["time"]) > timedelta(hours=24)):
+            continue
+            
+        col1, col2, col3 = st.columns([1, 8, 1])
+        is_checked = col1.checkbox("", value=g["checked"], key=f"chk_{i}")
+        
+        if is_checked and not g["checked"]:
+            g["checked"], g["time"] = True, now_g.isoformat()
+        elif not is_checked:
+            g["checked"], g["time"] = False, None
+            
+        label = f"~~{g['item']}~~" if is_checked else g['item']
+        col2.write(label)
+        
+        if col3.button("🗑️", key=f"del_{i}"):
+            continue
+            
+        new_groceries.append(g)
+    
+    if st.button("Sync Changes"):
+        data["groceries"] = new_groceries
         save_data(data); st.rerun()
