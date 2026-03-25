@@ -17,7 +17,6 @@ def load_data():
         with open(DATA_FILE, "r") as f:
             try:
                 d = json.load(f)
-                # Initialize Weights (Multiplier) if they don't exist
                 if "weights" not in d:
                     d["weights"] = {
                         "Joy": {c: 1.0 for c in CATEGORIES},
@@ -29,24 +28,22 @@ def load_data():
                 return d
             except: pass
     return {
-        "weights": {
-            "Joy": {c: 1.0 for c in CATEGORIES},
-            "Marcy": {c: 1.0 for c in CATEGORIES}
-        },
-        "groceries": [], 
-        "appointments": [], 
-        "history": {}
+        "weights": {"Joy": {c: 1.0 for c in CATEGORIES}, "Marcy": {c: 1.0 for c in CATEGORIES}},
+        "groceries": [], "appointments": [], "history": {}
     }
 
 def save_data(d):
     with open(DATA_FILE, "w") as f:
         json.dump(d, f)
 
-# --- INITIALIZE ---
+# --- INITIALIZE DYNAMIC DATES ---
 st.cache_data.clear()
 data = load_data()
-today_str = "2026-03-24" 
-tomorrow_str = "2026-03-25"
+
+# FIXED: These now update automatically based on your local time
+now_dt = get_local_now()
+today_str = now_dt.strftime("%Y-%m-%d")
+tomorrow_str = (now_dt + timedelta(days=1)).strftime("%Y-%m-%d")
 
 st.set_page_config(page_title="Joy & Marcy Sync", layout="wide")
 st.title("🌙 The Daily Sync")
@@ -73,6 +70,7 @@ def render_rundown(date_key, label):
         with col:
             st.subheader(f"{'🌸' if name == 'Joy' else '⚡'} {name}")
             u = day_data.get(name, {})
+            
             with st.expander("🌅 Morning & Daytime", expanded=True):
                 if name == "Joy":
                     st.write(f"**Work:** {u.get('work', '---')} (Int: {u.get('intensity', '5')}/10)")
@@ -82,14 +80,22 @@ def render_rundown(date_key, label):
                     st.info(f"**Tasks:** {u.get('tasks', 'None')}")
                 for a in [a['desc'] for a in day_appts if a['owner'] in [name, "Both"]]:
                     st.error(f"⚠️ **Scheduled:** {a}")
-            with st.expander("🌆 Evening", expanded=True):
+            
+            with st.expander("🌆 After Work & Evening", expanded=True):
                 st.write(f"**Plan:** {u.get('after', 'TBD')}")
                 st.write(f"**Don't Forget:** {u.get('reminders', 'None')}")
-            if u.get("need"):
-                st.chat_message("user").write(f"**{name}'s Need:** {u.get('need')}")
+            
+            # FIXED: Partnership section now correctly displays Energy Level
+            with st.container(border=True):
+                st.write("**🤝 Partnership**")
+                energy = u.get('energy', '5')
+                color = "green" if energy > 7 else "orange" if energy > 4 else "red"
+                st.markdown(f"**Energy Level:** :{color}[{energy}/10]")
+                
+                if u.get("need"):
+                    st.chat_message("user").write(f"**Need:** {u.get('need')}")
 
 # --- TAB LOGIC ---
-
 with tabs[0]: render_rundown(today_str, "Today")
 
 with tabs[1]:
@@ -97,11 +103,9 @@ with tabs[1]:
     if st.button("🏆 Decide Tomorrow's Dinner"):
         fresh_d = load_data()
         w = fresh_d["weights"]
-        
         j_v = fresh_d["history"].get(tomorrow_str, {}).get("Joy", {}).get("votes", {})
         m_v = fresh_d["history"].get(tomorrow_str, {}).get("Marcy", {}).get("votes", {})
         
-        # CALCULATION: (Vote * Current Category Weight)
         scores = {}
         for c in CATEGORIES:
             val_j = j_v.get(c, 0) * w["Joy"].get(c, 1.0)
@@ -110,24 +114,20 @@ with tabs[1]:
         
         if any(scores.values()):
             win = max(scores, key=scores.get)
-            
-            # --- UPDATE WEIGHTS ---
             for c in CATEGORIES:
                 if c == win:
                     fresh_d["weights"]["Joy"][c] = 1.0
                     fresh_d["weights"]["Marcy"][c] = 1.0
                 else:
-                    # Increment weight by 0.05 per point voted
                     fresh_d["weights"]["Joy"][c] += round(j_v.get(c, 0) * 0.05, 2)
                     fresh_d["weights"]["Marcy"][c] += round(m_v.get(c, 0) * 0.05, 2)
-
             if tomorrow_str not in fresh_d["history"]: fresh_d["history"][tomorrow_str] = {}
             fresh_d["history"][tomorrow_str]["dinner_winner"] = win
             save_data(fresh_d); st.success(f"Winner: {win}!"); st.rerun()
 
 with tabs[2]:
     st.header("Nightly Sync")
-    target_date = st.date_input("Planning for:", value=get_local_now().date() + timedelta(days=1))
+    target_date = st.date_input("Planning for:", value=now_dt.date() + timedelta(days=1))
     t_key = target_date.strftime("%Y-%m-%d")
     user = st.radio("Who are you?", ["Joy", "Marcy"], horizontal=True)
     
@@ -137,10 +137,10 @@ with tabs[2]:
         else:
             gym, cyc, tsk = st.text_input("Gym"), st.text_input("Cycling"), st.text_area("Tasks")
         aft, rem = st.text_input("Evening Plan"), st.text_area("Reminders")
-        nrg, nd = st.select_slider("Energy", range(0, 11), 5), st.text_area("Request")
+        nrg = st.select_slider("Energy Level", range(0, 11), 5) # Slider added
+        nd = st.text_area("Request")
         
         st.subheader("🍕 Dinner Votes")
-        st.caption("Votes for losing categories increase your personal weight for that meal by 0.05 per point.")
         v_cols = st.columns(4)
         v_res = {c: v_cols[i % 4].number_input(c, 0, 10, 0) for i, c in enumerate(CATEGORIES)}
         
@@ -151,13 +151,10 @@ with tabs[2]:
             if user == "Joy": e.update({"work": w_t, "mtg": w_m, "intensity": w_i})
             else: e.update({"gym": gym, "cycle": cyc, "tasks": tsk})
             d_up["history"][t_key][user] = e
-            save_data(d_up); st.success("Saved!"); st.rerun()
+            save_data(d_up); st.success(f"Saved for {t_key}!"); st.rerun()
 
 with tabs[3]:
     st.header("📊 Personal Meal Weights")
-    st.write("Your weight increases when you vote for a meal and it loses. It resets to 1.0 when it wins.")
-    
-    # Visualizing the weight table
     display_data = []
     for c in CATEGORIES:
         display_data.append({
