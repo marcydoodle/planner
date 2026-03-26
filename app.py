@@ -63,7 +63,7 @@ def render_rundown(date_key, label):
             st.subheader(f"{'🌸' if name == 'Joy' else '⚡'} {name}")
             u = day_data.get(name, {})
             
-            # 1. DAYTIME BLOCK
+            # Daytime
             with st.expander("🌅 Morning & Daytime", expanded=True):
                 if name == "Joy":
                     st.write(f"**Work:** {u.get('work', '---')} (Int: {u.get('intensity', '5')}/10)")
@@ -74,17 +74,17 @@ def render_rundown(date_key, label):
                 for a in [a['desc'] for a in day_appts if a['owner'] in [name, "Both"]]:
                     st.error(f"⚠️ **Scheduled:** {a}")
             
-            # 2. EVENING BLOCK
+            # Evening
             with st.expander("🌆 After Work & Evening", expanded=True):
                 st.write(f"**Plan:** {u.get('after', 'TBD')}")
                 st.write(f"**Don't Forget:** {u.get('reminders', 'None')}")
             
-            # 3. ENERGY STATUS (Separate)
+            # Energy Status
             energy = u.get('energy', '5')
             color = "green" if int(energy) > 7 else "orange" if int(energy) > 4 else "red"
             st.markdown(f"**Current Energy:** :{color}[{energy}/10]")
 
-            # 4. PARTNERSHIP BLOCK (Request Only)
+            # Partnership
             with st.container(border=True):
                 st.write("### 🤝 What we need from each other")
                 req = u.get("need")
@@ -94,8 +94,45 @@ def render_rundown(date_key, label):
                     st.caption("No specific request listed.")
 
 # --- TAB LOGIC ---
-with tabs[0]: render_rundown(today_str, "Today")
-with tabs[1]: render_rundown(tomorrow_str, "Tomorrow")
+with tabs[0]: 
+    render_rundown(today_str, "Today")
+
+with tabs[1]: 
+    render_rundown(tomorrow_str, "Tomorrow")
+    st.divider()
+    # RESTORED: Dinner Winner Decider
+    if st.button("🏆 Decide Tomorrow's Dinner"):
+        fresh_d = load_data()
+        w = fresh_d["weights"]
+        
+        j_v = fresh_d["history"].get(tomorrow_str, {}).get("Joy", {}).get("votes", {})
+        m_v = fresh_d["history"].get(tomorrow_str, {}).get("Marcy", {}).get("votes", {})
+        
+        # Calculate Weighted Scores
+        scores = {}
+        for c in CATEGORIES:
+            val_j = j_v.get(c, 0) * w["Joy"].get(c, 1.0)
+            val_m = m_v.get(c, 0) * w["Marcy"].get(c, 1.0)
+            scores[c] = val_j + val_m
+        
+        if any(scores.values()):
+            win = max(scores, key=scores.get)
+            
+            # Update weights: Reset winner to 1.0, increment losers
+            for c in CATEGORIES:
+                if c == win:
+                    fresh_d["weights"]["Joy"][c] = 1.0
+                    fresh_d["weights"]["Marcy"][c] = 1.0
+                else:
+                    fresh_d["weights"]["Joy"][c] += round(j_v.get(c, 0) * 0.05, 2)
+                    fresh_d["weights"]["Marcy"][c] += round(m_v.get(c, 0) * 0.05, 2)
+
+            if tomorrow_str not in fresh_d["history"]: fresh_d["history"][tomorrow_str] = {}
+            fresh_d["history"][tomorrow_str]["dinner_winner"] = win
+            save_data(fresh_d)
+            st.success(f"Tomorrow's Winner: {win.upper()}!")
+            st.balloons()
+            st.rerun()
 
 with tabs[2]:
     st.header("Nightly Sync")
@@ -116,9 +153,9 @@ with tabs[2]:
         nd = st.text_area("What do you need from your partner tomorrow?")
         
         st.subheader("🛒 Shopping")
-        g_add = st.text_input("Add Items to Grocery List (Milk, Bread, etc.)")
+        g_add = st.text_input("Add Items to Grocery List (comma separated)")
         
-        st.subheader("🍕 Dinner")
+        st.subheader("🍕 Dinner Votes")
         v_cols = st.columns(4)
         v_res = {c: v_cols[i % 4].number_input(c, 0, 10, 0) for i, c in enumerate(CATEGORIES)}
         
@@ -126,13 +163,11 @@ with tabs[2]:
             d_up = load_data()
             if t_key not in d_up["history"]: d_up["history"][t_key] = {}
             
-            # Save User Data
             entry = {"energy": nrg, "after": aft, "reminders": rem, "need": nd, "votes": v_res}
             if user == "Joy": entry.update({"work": w_t, "mtg": w_m, "intensity": w_i})
             else: entry.update({"gym": gym, "cycle": cyc, "tasks": tsk})
             d_up["history"][t_key][user] = entry
             
-            # Save Groceries
             if g_add:
                 for item in [i.strip() for i in g_add.split(",") if i.strip()]:
                     d_up["groceries"].append({"item": item, "checked": False, "time": None})
@@ -140,7 +175,7 @@ with tabs[2]:
             save_data(d_up); st.success("Saved!"); st.rerun()
 
 with tabs[3]:
-    st.header("📊 Weights")
+    st.header("📊 Personal Weights")
     display_data = [{"Category": c, "Joy": f"{data['weights']['Joy'].get(c, 1.0):.2f}x", "Marcy": f"{data['weights']['Marcy'].get(c, 1.0):.2f}x"} for c in CATEGORIES]
     st.table(pd.DataFrame(display_data))
 
