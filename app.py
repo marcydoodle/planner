@@ -17,6 +17,7 @@ def load_data():
         with open(DATA_FILE, "r") as f:
             try:
                 d = json.load(f)
+                # Ensure all keys exist
                 for k in ["history", "weights", "groceries", "appointments"]:
                     if k not in d: d[k] = {} if k in ["history", "weights"] else []
                 return d
@@ -28,73 +29,78 @@ def load_data():
 
 def save_data(d):
     with open(DATA_FILE, "w") as f:
-        json.dump(d, f)
+        json.dump(d, f, indent=4)
 
 # --- INITIALIZE ---
-st.cache_data.clear()
-data = load_data()
+if 'data' not in st.session_state:
+    st.session_state.data = load_data()
+
 now_dt = get_local_now()
 today_str = now_dt.strftime("%Y-%m-%d")
 tomorrow_str = (now_dt + timedelta(days=1)).strftime("%Y-%m-%d")
 
-st.set_page_config(page_title="Joy & Marcy Sync", layout="wide")
+st.set_page_config(page_title="Joy & Marcy Sync", layout="wide", page_icon="🌙")
 st.title("🌙 The Daily Sync")
 
 # --- DINNER BANNER ---
-current_winner = data["history"].get(today_str, {}).get("dinner_winner", "TBD")
+current_winner = st.session_state.data["history"].get(today_str, {}).get("dinner_winner", "TBD")
 st.info(f"### 🍴 Tonight's Dinner: {current_winner.upper()}")
-st.divider()
 
-tabs = st.tabs(["📅 Today's Plan", "📋 Tomorrow's Rundown", "📝 Nightly Input", "📊 Standings", "🗓 Future Planner", "🛒 Groceries"])
+tabs = st.tabs(["📅 Today", "📋 Tomorrow", "📝 Nightly Input", "📊 Standings", "🗓 Future Planner", "🛒 Groceries"])
 
 def render_rundown(date_key, label):
-    fresh_d = load_data()
-    day_data = fresh_d["history"].get(date_key, {})
-    day_appts = [a for a in fresh_d["appointments"] if str(a.get('date')) == date_key]
+    d = st.session_state.data
+    day_data = d["history"].get(date_key, {})
+    day_appts = [a for a in d["appointments"] if a.get('date') == date_key]
+    
     st.header(f"{label}: {date_key}")
     
     if not day_data and not day_appts:
         st.warning(f"No sync recorded for {date_key}.")
         return
 
+    # Display Appointments for the day first
+    if day_appts:
+        with st.container(border=True):
+            st.subheader("📅 Scheduled Appointments")
+            for a in day_appts:
+                st.error(f"**{a['owner']}**: {a['desc']}")
+
     c1, c2 = st.columns(2)
     for name, col in zip(["Joy", "Marcy"], [c1, c2]):
         with col:
             st.subheader(f"{'🌸' if name == 'Joy' else '⚡'} {name}")
             u = day_data.get(name, {})
+            if not u:
+                st.caption("No input yet.")
+                continue
             
-            with st.expander("🌅 Morning & Daytime", expanded=True):
+            with st.expander("🌅 Daytime", expanded=True):
+                col_left, col_right = st.columns(2)
                 if name == "Joy":
-                    st.write(f"**Work:** {u.get('work', '---')} (Int: {u.get('intensity', '5')}/10)")
+                    col_left.write(f"**Work:** {u.get('work', '---')}")
+                    col_right.write(f"**Intensity:** {u.get('intensity', '5')}/10")
                     st.info(f"**Meetings:** {u.get('mtg', 'None')}")
                 else:
-                    st.write(f"**Gym:** {u.get('gym', 'Rest')} | **Cycle:** {u.get('cycle', 'No')}")
+                    col_left.write(f"**Gym:** {u.get('gym', 'Rest')}")
+                    col_right.write(f"**Cycle:** {u.get('cycle', 'No')}")
                     st.info(f"**Tasks:** {u.get('tasks', 'None')}")
-                for a in [a['desc'] for a in day_appts if a['owner'] in [name, "Both"]]:
-                    st.error(f"⚠️ **Scheduled:** {a}")
             
-            with st.expander("🌆 After Work & Evening", expanded=True):
+            with st.expander("🌆 Evening", expanded=True):
                 st.write(f"**Plan:** {u.get('after', 'TBD')}")
-                st.write(f"**Don't Forget:** {u.get('reminders', 'None')}")
-            
-            energy = u.get('energy', '5')
-            color = "green" if int(energy) > 7 else "orange" if int(energy) > 4 else "red"
-            st.markdown(f"**Current Energy:** :{color}[{energy}/10]")
+                st.write(f"**Reminders:** {u.get('reminders', 'None')}")
+                energy = u.get('energy', 5)
+                color = "green" if int(energy) > 7 else "orange" if int(energy) > 4 else "red"
+                st.markdown(f"**Energy Level:** :{color}[{energy}/10]")
 
-            with st.container(border=True):
-                st.write("### 🤝 What we need from each other")
-                req = u.get("need")
-                if req:
-                    st.chat_message("user").write(f"**{name}'s Request:** {req}")
-                else:
-                    st.caption("No specific request listed.")
+            if u.get("need"):
+                st.chat_message("assistant").write(f"**Request for Partner:** {u.get('need')}")
 
 def decide_winner(date_key):
-    """Calculates weighted scores and updates data for a specific date."""
-    fresh_d = load_data()
-    w = fresh_d["weights"]
-    j_v = fresh_d["history"].get(date_key, {}).get("Joy", {}).get("votes", {})
-    m_v = fresh_d["history"].get(date_key, {}).get("Marcy", {}).get("votes", {})
+    d = st.session_state.data
+    w = d["weights"]
+    j_v = d["history"].get(date_key, {}).get("Joy", {}).get("votes", {})
+    m_v = d["history"].get(date_key, {}).get("Marcy", {}).get("votes", {})
     
     scores = {}
     for c in CATEGORIES:
@@ -104,92 +110,137 @@ def decide_winner(date_key):
     
     if any(scores.values()):
         win = max(scores, key=scores.get)
+        # Weight Adjustment: Reset winner to 1.0, increment others slightly based on unfulfilled votes
         for c in CATEGORIES:
-            if c == win:
-                fresh_d["weights"]["Joy"][c] = 1.0
-                fresh_d["weights"]["Marcy"][c] = 1.0
-            else:
-                fresh_d["weights"]["Joy"][c] += round(j_v.get(c, 0) * 0.05, 2)
-                fresh_d["weights"]["Marcy"][c] += round(m_v.get(c, 0) * 0.05, 2)
+            for p in ["Joy", "Marcy"]:
+                if c == win:
+                    d["weights"][p][c] = 1.0
+                else:
+                    vote_amt = j_v.get(c, 0) if p == "Joy" else m_v.get(c, 0)
+                    d["weights"][p][c] += round(vote_amt * 0.1, 2)
 
-        if date_key not in fresh_d["history"]: fresh_d["history"][date_key] = {}
-        fresh_d["history"][date_key]["dinner_winner"] = win
-        save_data(fresh_d)
-        st.success(f"Winner: {win.upper()}!")
+        if date_key not in d["history"]: d["history"][date_key] = {}
+        d["history"][date_key]["dinner_winner"] = win
+        save_data(d)
         st.balloons()
         st.rerun()
     else:
-        st.error("No votes found for this date! Please enter votes in 'Nightly Input' first.")
+        st.error("No votes found! Go to Nightly Input first.")
 
-# --- TAB LOGIC ---
-with tabs[0]: 
+# --- TABS ---
+
+with tabs[0]: # TODAY
     render_rundown(today_str, "Today")
-    if st.button("🏆 Decide Tonight's Dinner"):
+    if st.button("🏆 Decide Tonight's Dinner", type="primary"):
         decide_winner(today_str)
 
-with tabs[1]: 
+with tabs[1]: # TOMORROW
     render_rundown(tomorrow_str, "Tomorrow")
     if st.button("🏆 Decide Tomorrow's Dinner"):
         decide_winner(tomorrow_str)
 
-with tabs[2]:
+with tabs[2]: # INPUT
     st.header("Nightly Sync")
     target_date = st.date_input("Planning for:", value=now_dt.date() + timedelta(days=1))
     t_key = target_date.strftime("%Y-%m-%d")
     user = st.radio("Who are you?", ["Joy", "Marcy"], horizontal=True)
     
-    with st.form("input_form"):
+    with st.form("input_form", clear_on_submit=True):
         st.subheader("📋 Essentials")
         if user == "Joy":
-            w_t, w_i, w_m = st.text_input("Work"), st.select_slider("Intensity", range(1, 11), 5), st.text_area("Meetings")
+            w_t = st.text_input("Work Focus")
+            w_i = st.select_slider("Work Intensity", range(1, 11), 5)
+            w_m = st.text_area("Key Meetings")
         else:
-            gym, cyc, tsk = st.text_input("Gym"), st.text_input("Cycling"), st.text_area("Tasks")
-        aft, rem = st.text_input("Evening Plan"), st.text_area("Reminders")
+            gym = st.text_input("Gym Focus")
+            cyc = st.text_input("Cycling Plan")
+            tsk = st.text_area("Main Tasks")
+            
+        aft = st.text_input("Evening Plan")
+        rem = st.text_area("Reminders/Don't Forget")
         
         st.subheader("🤝 Support")
-        nrg = st.select_slider("Energy Level", range(0, 11), 5)
-        nd = st.text_area("What do you need from your partner?")
+        nrg = st.select_slider("Energy Level", range(1, 11), 5)
+        nd = st.text_area("What do you need from your partner tomorrow?")
         
-        st.subheader("🛒 Shopping")
-        g_add = st.text_input("Add Items to Grocery List (comma separated)")
-        
-        st.subheader("🍕 Dinner Votes")
+        st.subheader("🍕 Dinner Votes (0-10)")
         v_cols = st.columns(4)
-        v_res = {c: v_cols[i % 4].number_input(c, 0, 10, 0) for i, c in enumerate(CATEGORIES)}
+        v_res = {c: v_cols[i % 4].number_input(c, 0, 10, 0, key=f"vote_{c}") for i, c in enumerate(CATEGORIES)}
         
         if st.form_submit_button("Submit Sync"):
             d_up = load_data()
             if t_key not in d_up["history"]: d_up["history"][t_key] = {}
+            
             entry = {"energy": nrg, "after": aft, "reminders": rem, "need": nd, "votes": v_res}
             if user == "Joy": entry.update({"work": w_t, "mtg": w_m, "intensity": w_i})
             else: entry.update({"gym": gym, "cycle": cyc, "tasks": tsk})
+            
             d_up["history"][t_key][user] = entry
-            
-            if g_add:
-                for item in [i.strip() for i in g_add.split(",") if i.strip()]:
-                    d_up["groceries"].append({"item": item, "checked": False, "time": None})
-            
-            save_data(d_up); st.success("Saved!"); st.rerun()
+            save_data(d_up)
+            st.session_state.data = d_up
+            st.success("Sync Saved!")
+            st.rerun()
 
-with tabs[3]:
-    st.header("📊 Personal Weights")
-    display_data = [{"Category": c, "Joy": f"{data['weights']['Joy'].get(c, 1.0):.2f}x", "Marcy": f"{data['weights']['Marcy'].get(c, 1.0):.2f}x"} for c in CATEGORIES]
+with tabs[3]: # STANDINGS
+    st.header("📊 Multiplier Status")
+    st.write("The more you vote for something and *don't* get it, the higher your multiplier grows.")
+    display_data = []
+    for c in CATEGORIES:
+        display_data.append({
+            "Category": c, 
+            "Joy Multiplier": f"{st.session_state.data['weights']['Joy'].get(c, 1.0):.2f}x",
+            "Marcy Multiplier": f"{st.session_state.data['weights']['Marcy'].get(c, 1.0):.2f}x"
+        })
     st.table(pd.DataFrame(display_data))
 
-with tabs[5]:
-    st.header("🛒 Groceries")
-    now_g = get_local_now()
-    new_groceries = []
-    for i, g in enumerate(data["groceries"]):
-        if g["checked"] and g["time"] and (now_g - datetime.fromisoformat(g["time"]) > timedelta(hours=24)): continue
-        col1, col2, col3 = st.columns([1, 8, 1])
-        is_checked = col1.checkbox("", value=g["checked"], key=f"chk_{i}")
-        if is_checked and not g["checked"]: g["checked"], g["time"] = True, now_g.isoformat()
-        elif not is_checked: g["checked"], g["time"] = False, None
-        col2.write(f"~~{g['item']}~~" if is_checked else g['item'])
-        if col3.button("🗑️", key=f"del_{i}"): continue
-        new_groceries.append(g)
+with tabs[4]: # FUTURE PLANNER
+    st.header("🗓 Appointment Planner")
+    with st.expander("➕ Add New Appointment"):
+        with st.form("appt_form"):
+            a_date = st.date_input("Date")
+            a_owner = st.selectbox("Who", ["Joy", "Marcy", "Both"])
+            a_desc = st.text_input("Description (e.g., Dentist 4pm)")
+            if st.form_submit_button("Add to Calendar"):
+                st.session_state.data["appointments"].append({
+                    "date": a_date.strftime("%Y-%m-%d"),
+                    "owner": a_owner,
+                    "desc": a_desc
+                })
+                save_data(st.session_state.data)
+                st.rerun()
+
+    if st.session_state.data["appointments"]:
+        st.subheader("Upcoming")
+        appts_df = pd.DataFrame(st.session_state.data["appointments"])
+        # Filter for future or today
+        appts_df = appts_df[appts_df['date'] >= today_str].sort_values('date')
+        st.table(appts_df)
+        if st.button("Clear Old Appointments"):
+            st.session_state.data["appointments"] = [a for a in st.session_state.data["appointments"] if a['date'] >= today_str]
+            save_data(st.session_state.data)
+            st.rerun()
+
+with tabs[5]: # GROCERIES
+    st.header("🛒 Shared Grocery List")
     
-    if st.button("Sync Changes"):
-        data["groceries"] = new_groceries
-        save_data(data); st.rerun()
+    # Use Data Editor for a better experience
+    g_df = pd.DataFrame(st.session_state.data["groceries"])
+    if g_df.empty:
+        g_df = pd.DataFrame(columns=["item", "checked"])
+    
+    edited_g = st.data_editor(
+        g_df, 
+        column_config={
+            "checked": st.column_config.CheckboxColumn("Done?", default=False),
+            "item": st.column_config.TextColumn("Item Name")
+        },
+        num_rows="dynamic",
+        use_container_width=True,
+        key="grocery_editor"
+    )
+    
+    if st.button("Save List Changes"):
+        st.session_state.data["groceries"] = edited_g.to_dict('records')
+        save_data(st.session_state.data)
+        st.success("Groceries updated!")
+        st.rerun()
