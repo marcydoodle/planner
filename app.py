@@ -1,15 +1,21 @@
 import streamlit as st
+import json
 import pandas as pd
 from datetime import datetime, timedelta
 import pytz
 import requests
 
-# --- CLOUD SETUP ---
+# --- CONFIG ---
 CATEGORIES = ["Mexican", "Asian", "Pasta", "Roast", "Caribbean"]
 
 # Pull keys securely from Streamlit Cloud Secrets
-BIN_ID = st.secrets["BIN_ID"]
-API_KEY = st.secrets["API_KEY"]
+try:
+    BIN_ID = st.secrets["BIN_ID"]
+    API_KEY = st.secrets["API_KEY"]
+except KeyError:
+    st.error("Missing Streamlit secrets. Please make sure BIN_ID and API_KEY are in your app settings.")
+    st.stop()
+
 BIN_URL = f"https://api.jsonbin.io/v3/b/{BIN_ID}"
 
 def get_local_now():
@@ -52,10 +58,6 @@ def save_data(d):
 if 'data' not in st.session_state:
     st.session_state.data = load_data()
 
-# --- INITIALIZE ---
-if 'data' not in st.session_state:
-    st.session_state.data = load_data()
-
 now_dt = get_local_now()
 today_str = now_dt.strftime("%Y-%m-%d")
 tomorrow_str = (now_dt + timedelta(days=1)).strftime("%Y-%m-%d")
@@ -69,7 +71,7 @@ st.info(f"### 🍴 Tonight's Dinner: {current_winner.upper()}")
 st.divider()
 
 # --- TABS ---
-tabs = st.tabs(["📅 Today", "📋 Tomorrow", "📝 Nightly Input", "📊 Standings", "🗓 Future Planner", "🛒 Groceries"])
+tabs = st.tabs(["📅 Today", "📋 Tomorrow", "📝 Nightly Input", "📊 Standings", "🗓 Future Planner", "🛒 Groceries", "📜 History"])
 
 def render_rundown(date_key, label):
     d = st.session_state.data
@@ -127,7 +129,8 @@ def render_rundown(date_key, label):
 
 def decide_winner(date_key):
     """Calculates weighted scores and updates data for a specific date."""
-    d = st.session_state.data
+    # Pull fresh from cloud to prevent race condition data overwrites
+    d = load_data() 
     w = d["weights"]
     j_v = d["history"].get(date_key, {}).get("Joy", {}).get("votes", {})
     m_v = d["history"].get(date_key, {}).get("Marcy", {}).get("votes", {})
@@ -155,6 +158,7 @@ def decide_winner(date_key):
         if date_key not in d["history"]: d["history"][date_key] = {}
         d["history"][date_key]["dinner_winner"] = win
         save_data(d)
+        st.session_state.data = d # Update memory
         st.success(f"Winner: {win.upper()}!")
         st.balloons()
         st.rerun()
@@ -205,23 +209,32 @@ with tabs[2]: # INPUT
         nrg = st.select_slider("Energy Level", range(1, 11), 5, key=f"nrg_{user}")
         nd = st.text_area("What do you need from your partner tomorrow?", key=f"nd_{user}")
 
-        st.subheader("🍕 Dinner Votes (0-10)")
+        st.subheader("🍕 Dinner Votes (Max 10 Points Total)")
         v_cols = st.columns(len(CATEGORIES))
         v_res = {c: v_cols[i % len(CATEGORIES)].number_input(c, 0, 10, 0, key=f"vote_{c}_{user}") for i, c in enumerate(CATEGORIES)}
 
         if st.form_submit_button("Submit Sync"):
-            d_up = st.session_state.data
-            if t_key not in d_up["history"]: d_up["history"][t_key] = {}
+            total_votes = sum(v_res.values())
             
-            entry = {"energy": nrg, "after": aft, "reminders": rem, "need": nd, "votes": v_res}
-            if user == "Joy": entry.update({"work": w_t, "mtg": w_m, "intensity": w_i})
-            else: entry.update({"gym": gym, "cycle": cyc, "tasks": tsk})
-            
-            d_up["history"][t_key][user] = entry
-            save_data(d_up)
-            st.session_state.data = d_up
-            st.success(f"Sync Saved for {user}!")
-            st.rerun()
+            # The 10-Point Rule Check
+            if total_votes > 10:
+                st.error(f"⚠️ You used {total_votes} points. Please adjust your votes to a maximum of 10 points and try again!")
+            else:
+                with st.spinner("Syncing to cloud..."):
+                    # Anti-race condition: Load fresh data exactly at the moment of saving
+                    d_up = load_data()
+                    if t_key not in d_up["history"]: d_up["history"][t_key] = {}
+                    
+                    entry = {"energy": nrg, "after": aft, "reminders": rem, "need": nd, "votes": v_res}
+                    if user == "Joy": entry.update({"work": w_t, "mtg": w_m, "intensity": w_i})
+                    else: entry.update({"gym": gym, "cycle": cyc, "tasks": tsk})
+                    
+                    d_up["history"][t_key][user] = entry
+                    save_data(d_up)
+                    st.session_state.data = d_up # update memory locally
+                
+                st.success(f"Sync Saved securely for {user}!")
+                st.rerun()
 
 with tabs[3]: # STANDINGS
     st.header("📊 Multiplier Status")
@@ -244,12 +257,14 @@ with tabs[4]: # FUTURE PLANNER
             a_desc = st.text_input("Description (e.g., Dentist 4pm)")
             if st.form_submit_button("Add to Calendar"):
                 if a_desc.strip():
-                    st.session_state.data["appointments"].append({
+                    d_up = load_data() # Anti-race condition
+                    d_up["appointments"].append({
                         "date": a_date.strftime("%Y-%m-%d"),
                         "owner": a_owner,
                         "desc": a_desc
                     })
-                    save_data(st.session_state.data)
+                    save_data(d_up)
+                    st.session_state.data = d_up
                     st.rerun()
                 else:
                     st.error("Please provide a description.")
@@ -260,22 +275,48 @@ with tabs[4]: # FUTURE PLANNER
         appts_df = appts_df[appts_df['date'] >= today_str].sort_values('date')
         st.table(appts_df)
         if st.button("Clear Old Appointments"):
-            st.session_state.data["appointments"] = [a for a in st.session_state.data["appointments"] if a['date'] >= today_str]
-            save_data(st.session_state.data)
+            d_up = load_data()
+            d_up["appointments"] = [a for a in d_up["appointments"] if a['date'] >= today_str]
+            save_data(d_up)
+            st.session_state.data = d_up
             st.rerun()
 
 with tabs[5]: # GROCERIES
     st.header("🛒 Shared Grocery List")
+    now_time = get_local_now()
     
-    g_df = pd.DataFrame(st.session_state.data["groceries"])
+    # Garbage Collection: Strip out items checked off > 24 hours ago
+    active_groceries = []
+    needs_cleanup_save = False
+    
+    for g in st.session_state.data["groceries"]:
+        if g.get("checked") and g.get("time"):
+            try:
+                checked_time = datetime.fromisoformat(g["time"])
+                if now_time - checked_time > timedelta(hours=24):
+                    needs_cleanup_save = True
+                    continue
+            except ValueError:
+                pass
+        active_groceries.append(g)
+        
+    if needs_cleanup_save:
+        st.session_state.data["groceries"] = active_groceries
+        d_up = load_data()
+        d_up["groceries"] = active_groceries
+        save_data(d_up)
+        
+    g_df = pd.DataFrame(active_groceries)
     if g_df.empty:
-        g_df = pd.DataFrame(columns=["item", "checked"])
+        g_df = pd.DataFrame(columns=["item", "checked", "time"])
 
+    # Provide None for time to hide it from the user interface
     edited_g = st.data_editor(
         g_df, 
         column_config={
             "checked": st.column_config.CheckboxColumn("Done?", default=False),
-            "item": st.column_config.TextColumn("Item Name")
+            "item": st.column_config.TextColumn("Item Name"),
+            "time": None 
         },
         num_rows="dynamic",
         use_container_width=True,
@@ -283,7 +324,39 @@ with tabs[5]: # GROCERIES
     )
     
     new_groceries = edited_g.to_dict('records')
-    if st.session_state.data["groceries"] != new_groceries:
-        st.session_state.data["groceries"] = new_groceries
-        save_data(st.session_state.data)
+    changes_detected = False
+    
+    # Detect checkbox clicks to assign timestamps
+    for i, row in enumerate(new_groceries):
+        old_checked = False
+        if i < len(active_groceries):
+            old_checked = active_groceries[i].get("checked", False)
+            
+        if row.get("checked") and not old_checked:
+            row["time"] = now_time.isoformat()
+            changes_detected = True
+        elif not row.get("checked") and old_checked:
+            row["time"] = None
+            changes_detected = True
+    
+    # Save automatically if text was typed, rows were added/deleted, or boxes were checked
+    if new_groceries != active_groceries or changes_detected:
+        d_up = load_data()
+        d_up["groceries"] = new_groceries
+        save_data(d_up)
+        st.session_state.data = d_up
         st.rerun()
+
+with tabs[6]: # HISTORY
+    st.header("📜 Time Machine")
+    st.write("Select a past date to view its daily rundown.")
+    
+    history_date = st.date_input(
+        "Historical Date:", 
+        value=now_dt.date() - timedelta(days=1), 
+        max_value=now_dt.date()
+    )
+    h_key = history_date.strftime("%Y-%m-%d")
+    
+    st.divider()
+    render_rundown(h_key, "Historical Rundown")
