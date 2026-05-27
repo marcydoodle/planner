@@ -1,8 +1,3 @@
-Here is the fully rewritten, polished version of the `Joy & Marcy Sync` app.
-
-This version integrates all the bug fixes (preventing the `KeyError`, fixing the data editor auto-saving, and preventing state overwrites) and implements the UX upgrades (requiring both partners to sync before deciding dinner, and ensuring sticky keys separate the form logic properly).
-
-```python
 import streamlit as st
 import json
 import pandas as pd
@@ -278,5 +273,3 @@ with tabs[5]: # GROCERIES
         st.session_state.data["groceries"] = new_groceries
         save_data(st.session_state.data)
         st.rerun()
-
-```
