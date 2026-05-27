@@ -1,39 +1,56 @@
 import streamlit as st
-import json
 import pandas as pd
 from datetime import datetime, timedelta
 import pytz
+import requests
 
-DATA_FILE = "sync_data.json"
+# --- CLOUD SETUP ---
 CATEGORIES = ["Mexican", "Asian", "Pasta", "Roast", "Caribbean"]
+
+# Pull keys securely from Streamlit Cloud Secrets
+BIN_ID = st.secrets["BIN_ID"]
+API_KEY = st.secrets["API_KEY"]
+BIN_URL = f"https://api.jsonbin.io/v3/b/{BIN_ID}"
 
 def get_local_now():
     return datetime.now(pytz.timezone("US/Eastern"))
 
 def load_data():
-    with open(DATA_FILE, "r") as f:
-        try:
-            d = json.load(f)
-        except (json.JSONDecodeError, FileNotFoundError):
-            d = {}
-        
-        # Ensure base keys exist
-        for k in ["history", "groceries", "appointments"]:
-            if k not in d: 
-                d[k] = {} if k == "history" else []
-                
-        # Safely ensure weight keys exist to prevent KeyErrors for new users
-        if "weights" not in d:
-            d["weights"] = {"Joy": {}, "Marcy": {}}
+    headers = {"X-Master-Key": API_KEY}
+    try:
+        # Ask the cloud for your JSON file
+        response = requests.get(BIN_URL, headers=headers)
+        if response.status_code == 200:
+            d = response.json().get('record', {})
         else:
-            if "Joy" not in d["weights"]: d["weights"]["Joy"] = {}
-            if "Marcy" not in d["weights"]: d["weights"]["Marcy"] = {}
+            d = {}
+    except Exception:
+        d = {}
+    
+    # Ensure base keys exist (safety check)
+    for k in ["history", "groceries", "appointments"]:
+        if k not in d: 
+            d[k] = {} if k == "history" else []
             
-        return d
+    if "weights" not in d:
+        d["weights"] = {"Joy": {}, "Marcy": {}}
+    else:
+        if "Joy" not in d["weights"]: d["weights"]["Joy"] = {}
+        if "Marcy" not in d["weights"]: d["weights"]["Marcy"] = {}
+        
+    return d
 
 def save_data(d):
-    with open(DATA_FILE, "w") as f:
-        json.dump(d, f, indent=4)
+    headers = {
+        "Content-Type": "application/json",
+        "X-Master-Key": API_KEY
+    }
+    # Push the updated JSON file back to the cloud
+    requests.put(BIN_URL, json=d, headers=headers)
+
+# --- INITIALIZE ---
+if 'data' not in st.session_state:
+    st.session_state.data = load_data()
 
 # --- INITIALIZE ---
 if 'data' not in st.session_state:
