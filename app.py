@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import pytz
 
 DATA_FILE = "sync_data.json"
-CATEGORIES = ["Cooking", "Takeout", "Dine Out", "Leftovers"]
+CATEGORIES = ["Mexican", "Asian", "Pasta", "Roast", "Caribbean"]
 
 def get_local_now():
     return datetime.now(pytz.timezone("US/Eastern"))
@@ -172,7 +172,6 @@ with tabs[2]: # INPUT
 
     with st.form("input_form", clear_on_submit=True):
         st.subheader("📋 Essentials")
-        # Added f"_{user}" to keys to prevent form field cross-contamination between users
         if user == "Joy":
             w_t = st.text_input("Work Focus", key=f"wt_{user}")
             w_i = st.select_slider("Work Intensity", range(1, 11), 5, key=f"wi_{user}")
@@ -190,86 +189,9 @@ with tabs[2]: # INPUT
         nd = st.text_area("What do you need from your partner tomorrow?", key=f"nd_{user}")
 
         st.subheader("🍕 Dinner Votes (0-10)")
-        v_cols = st.columns(4)
-        v_res = {c: v_cols[i % 4].number_input(c, 0, 10, 0, key=f"vote_{c}_{user}") for i, c in enumerate(CATEGORIES)}
+        v_cols = st.columns(len(CATEGORIES))
+        v_res = {c: v_cols[i % len(CATEGORIES)].number_input(c, 0, 10, 0, key=f"vote_{c}_{user}") for i, c in enumerate(CATEGORIES)}
 
         if st.form_submit_button("Submit Sync"):
-            # Update session state memory directly rather than reading fresh from disk
             d_up = st.session_state.data
-            if t_key not in d_up["history"]: d_up["history"][t_key] = {}
-            
-            entry = {"energy": nrg, "after": aft, "reminders": rem, "need": nd, "votes": v_res}
-            if user == "Joy": entry.update({"work": w_t, "mtg": w_m, "intensity": w_i})
-            else: entry.update({"gym": gym, "cycle": cyc, "tasks": tsk})
-            
-            d_up["history"][t_key][user] = entry
-            save_data(d_up)
-            st.session_state.data = d_up
-            st.success(f"Sync Saved for {user}!")
-            st.rerun()
-
-with tabs[3]: # STANDINGS
-    st.header("📊 Multiplier Status")
-    st.write("The more you vote for something and *don't* get it, the higher your multiplier grows.")
-    display_data = []
-    for c in CATEGORIES:
-        display_data.append({
-            "Category": c, 
-            "Joy Multiplier": f"{st.session_state.data['weights']['Joy'].get(c, 1.0):.2f}x",
-            "Marcy Multiplier": f"{st.session_state.data['weights']['Marcy'].get(c, 1.0):.2f}x"
-        })
-    st.table(pd.DataFrame(display_data))
-
-with tabs[4]: # FUTURE PLANNER
-    st.header("🗓 Appointment Planner")
-    with st.expander("➕ Add New Appointment"):
-        with st.form("appt_form", clear_on_submit=True):
-            a_date = st.date_input("Date")
-            a_owner = st.selectbox("Who", ["Joy", "Marcy", "Both"])
-            a_desc = st.text_input("Description (e.g., Dentist 4pm)")
-            if st.form_submit_button("Add to Calendar"):
-                if a_desc.strip():
-                    st.session_state.data["appointments"].append({
-                        "date": a_date.strftime("%Y-%m-%d"),
-                        "owner": a_owner,
-                        "desc": a_desc
-                    })
-                    save_data(st.session_state.data)
-                    st.rerun()
-                else:
-                    st.error("Please provide a description.")
-
-    if st.session_state.data["appointments"]:
-        st.subheader("Upcoming")
-        appts_df = pd.DataFrame(st.session_state.data["appointments"])
-        appts_df = appts_df[appts_df['date'] >= today_str].sort_values('date')
-        st.table(appts_df)
-        if st.button("Clear Old Appointments"):
-            st.session_state.data["appointments"] = [a for a in st.session_state.data["appointments"] if a['date'] >= today_str]
-            save_data(st.session_state.data)
-            st.rerun()
-
-with tabs[5]: # GROCERIES
-    st.header("🛒 Shared Grocery List")
-    
-    g_df = pd.DataFrame(st.session_state.data["groceries"])
-    if g_df.empty:
-        g_df = pd.DataFrame(columns=["item", "checked"])
-
-    edited_g = st.data_editor(
-        g_df, 
-        column_config={
-            "checked": st.column_config.CheckboxColumn("Done?", default=False),
-            "item": st.column_config.TextColumn("Item Name")
-        },
-        num_rows="dynamic",
-        use_container_width=True,
-        key="grocery_editor"
-    )
-    
-    # Auto-save changes detected in the data_editor
-    new_groceries = edited_g.to_dict('records')
-    if st.session_state.data["groceries"] != new_groceries:
-        st.session_state.data["groceries"] = new_groceries
-        save_data(st.session_state.data)
-        st.rerun()
+            if t_key not
