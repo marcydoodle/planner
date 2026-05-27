@@ -7,6 +7,7 @@ import requests
 
 # --- CONFIG ---
 CATEGORIES = ["Mexican", "Asian", "Pasta", "Roast", "Caribbean"]
+AISLES = ["Produce", "Dairy & Fridge", "Meat & Seafood", "Pantry", "Frozen", "Household", "Other"]
 
 # Pull keys securely from Streamlit Cloud Secrets
 try:
@@ -17,14 +18,23 @@ except KeyError:
     st.stop()
 
 BIN_URL = f"https://api.jsonbin.io/v3/b/{BIN_ID}"
+WEBHOOK_URL = st.secrets.get("WEBHOOK_URL", None) # Optional webhook
 
 def get_local_now():
     return datetime.now(pytz.timezone("US/Eastern"))
 
+def send_notification(user_name):
+    """Fires a webhook notification to Discord/Slack if configured."""
+    if WEBHOOK_URL:
+        msg = f"🌙 **{user_name}** just submitted their nightly sync! Waiting on you."
+        try:
+            requests.post(WEBHOOK_URL, json={"content": msg}, timeout=2)
+        except Exception:
+            pass # Fail silently so it doesn't break the app
+
 def load_data():
     headers = {"X-Master-Key": API_KEY}
     try:
-        # Ask the cloud for your JSON file
         response = requests.get(BIN_URL, headers=headers)
         if response.status_code == 200:
             d = response.json().get('record', {})
@@ -33,10 +43,9 @@ def load_data():
     except Exception:
         d = {}
     
-    # Ensure base keys exist (safety check)
+    # Ensure base keys exist
     for k in ["history", "groceries", "appointments"]:
-        if k not in d: 
-            d[k] = {} if k == "history" else []
+        if k not in d: d[k] = {} if k == "history" else []
             
     if "weights" not in d:
         d["weights"] = {"Joy": {}, "Marcy": {}}
@@ -51,8 +60,22 @@ def save_data(d):
         "Content-Type": "application/json",
         "X-Master-Key": API_KEY
     }
-    # Push the updated JSON file back to the cloud
     requests.put(BIN_URL, json=d, headers=headers)
+
+def calculate_streak(history_data):
+    """Calculates consecutive days where BOTH users submitted data."""
+    streak = 0
+    check_date = get_local_now().date()
+    
+    while True:
+        date_str = check_date.strftime("%Y-%m-%d")
+        day_data = history_data.get(date_str, {})
+        if "Joy" in day_data and "Marcy" in day_data:
+            streak += 1
+            check_date -= timedelta(days=1)
+        else:
+            break
+    return streak
 
 # --- INITIALIZE ---
 if 'data' not in st.session_state:
@@ -71,7 +94,7 @@ st.info(f"### 🍴 Tonight's Dinner: {current_winner.upper()}")
 st.divider()
 
 # --- TABS ---
-tabs = st.tabs(["📅 Today", "📋 Tomorrow", "📝 Nightly Input", "📊 Standings", "🗓 Future Planner", "🛒 Groceries", "📜 History"])
+tabs = st.tabs(["📅 Today", "📋 Tomorrow", "📝 Nightly Input", "📊 Standings & Insights", "🗓 Future Planner", "🛒 Groceries", "📜 History"])
 
 def render_rundown(date_key, label):
     d = st.session_state.data
@@ -84,7 +107,6 @@ def render_rundown(date_key, label):
         st.warning(f"No sync recorded for {date_key}.")
         return
 
-    # Display Appointments for the day first
     if day_appts:
         with st.container(border=True):
             st.subheader("📅 Scheduled Appointments")
@@ -128,8 +150,6 @@ def render_rundown(date_key, label):
                     st.markdown(f"**Energy Level:** :{color}[{energy}/10]")
 
 def decide_winner(date_key):
-    """Calculates weighted scores and updates data for a specific date."""
-    # Pull fresh from cloud to prevent race condition data overwrites
     d = load_data() 
     w = d["weights"]
     j_v = d["history"].get(date_key, {}).get("Joy", {}).get("votes", {})
@@ -137,7 +157,6 @@ def decide_winner(date_key):
 
     scores = {c: 0 for c in CATEGORIES}
     
-    # Calculate scores based on votes * weights
     for c in CATEGORIES:
         j_score = j_v.get(c, 0) * w.get("Joy", {}).get(c, 1.0)
         m_score = m_v.get(c, 0) * w.get("Marcy", {}).get(c, 1.0)
@@ -146,7 +165,6 @@ def decide_winner(date_key):
     if any(scores.values()):
         win = max(scores, key=scores.get)
         
-        # Weight Adjustment: Reset winner to 1.0, increment others slightly based on unfulfilled votes
         for p in ["Joy", "Marcy"]:
             for c in CATEGORIES:
                 if c == win:
@@ -158,8 +176,8 @@ def decide_winner(date_key):
         if date_key not in d["history"]: d["history"][date_key] = {}
         d["history"][date_key]["dinner_winner"] = win
         save_data(d)
-        st.session_state.data = d # Update memory
-        st.success(f"Winner: {win.upper()}!")
+        st.session_state.data = d 
+        st.toast(f"Winner: {win.upper()}!", icon="🎉")
         st.balloons()
         st.rerun()
     else:
@@ -216,12 +234,10 @@ with tabs[2]: # INPUT
         if st.form_submit_button("Submit Sync"):
             total_votes = sum(v_res.values())
             
-            # The 10-Point Rule Check
             if total_votes > 10:
                 st.error(f"⚠️ You used {total_votes} points. Please adjust your votes to a maximum of 10 points and try again!")
             else:
                 with st.spinner("Syncing to cloud..."):
-                    # Anti-race condition: Load fresh data exactly at the moment of saving
                     d_up = load_data()
                     if t_key not in d_up["history"]: d_up["history"][t_key] = {}
                     
@@ -231,22 +247,55 @@ with tabs[2]: # INPUT
                     
                     d_up["history"][t_key][user] = entry
                     save_data(d_up)
-                    st.session_state.data = d_up # update memory locally
+                    st.session_state.data = d_up 
                 
-                st.success(f"Sync Saved securely for {user}!")
+                send_notification(user)
+                st.toast(f"Sync Saved securely for {user}! 🌙", icon="✅")
                 st.rerun()
 
-with tabs[3]: # STANDINGS
-    st.header("📊 Multiplier Status")
-    st.write("The more you vote for something and *don't* get it, the higher your multiplier grows.")
-    display_data = []
-    for c in CATEGORIES:
-        display_data.append({
-            "Category": c, 
-            "Joy Multiplier": f"{st.session_state.data['weights']['Joy'].get(c, 1.0):.2f}x",
-            "Marcy Multiplier": f"{st.session_state.data['weights']['Marcy'].get(c, 1.0):.2f}x"
-        })
-    st.table(pd.DataFrame(display_data))
+with tabs[3]: # STANDINGS & INSIGHTS
+    st.header("📊 Standings & Insights")
+    
+    # Streak Logic
+    streak = calculate_streak(st.session_state.data["history"])
+    st.metric(label="Current Sync Streak", value=f"{streak} Days", delta="Keep it up!" if streak > 0 else None)
+    st.divider()
+
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Multiplier Status")
+        st.write("The more you vote for something and *don't* get it, the higher your multiplier grows.")
+        display_data = []
+        for c in CATEGORIES:
+            display_data.append({
+                "Category": c, 
+                "Joy Multiplier": f"{st.session_state.data['weights']['Joy'].get(c, 1.0):.2f}x",
+                "Marcy Multiplier": f"{st.session_state.data['weights']['Marcy'].get(c, 1.0):.2f}x"
+            })
+        st.dataframe(pd.DataFrame(display_data), hide_index=True)
+
+    with col2:
+        st.subheader("Energy & Intensity (Last 14 Days)")
+        # Build Dataframe for charts
+        chart_data = []
+        hist = st.session_state.data["history"]
+        
+        # Get last 14 days sorted
+        recent_dates = sorted([d for d in hist.keys() if d <= today_str])[-14:]
+        
+        for d in recent_dates:
+            chart_data.append({
+                "Date": d,
+                "Joy's Work Intensity": hist[d].get("Joy", {}).get("intensity", 5),
+                "Marcy's Energy": hist[d].get("Marcy", {}).get("energy", 5)
+            })
+            
+        if chart_data:
+            df_chart = pd.DataFrame(chart_data).set_index("Date")
+            st.line_chart(df_chart, color=["#FF4B4B", "#0068C9"])
+        else:
+            st.info("Not enough data to graph yet!")
 
 with tabs[4]: # FUTURE PLANNER
     st.header("🗓 Appointment Planner")
@@ -257,7 +306,7 @@ with tabs[4]: # FUTURE PLANNER
             a_desc = st.text_input("Description (e.g., Dentist 4pm)")
             if st.form_submit_button("Add to Calendar"):
                 if a_desc.strip():
-                    d_up = load_data() # Anti-race condition
+                    d_up = load_data() 
                     d_up["appointments"].append({
                         "date": a_date.strftime("%Y-%m-%d"),
                         "owner": a_owner,
@@ -265,6 +314,7 @@ with tabs[4]: # FUTURE PLANNER
                     })
                     save_data(d_up)
                     st.session_state.data = d_up
+                    st.toast("Appointment added!", icon="📅")
                     st.rerun()
                 else:
                     st.error("Please provide a description.")
@@ -273,7 +323,7 @@ with tabs[4]: # FUTURE PLANNER
         st.subheader("Upcoming")
         appts_df = pd.DataFrame(st.session_state.data["appointments"])
         appts_df = appts_df[appts_df['date'] >= today_str].sort_values('date')
-        st.table(appts_df)
+        st.dataframe(appts_df, hide_index=True, use_container_width=True)
         if st.button("Clear Old Appointments"):
             d_up = load_data()
             d_up["appointments"] = [a for a in d_up["appointments"] if a['date'] >= today_str]
@@ -285,7 +335,6 @@ with tabs[5]: # GROCERIES
     st.header("🛒 Shared Grocery List")
     now_time = get_local_now()
     
-    # Garbage Collection: Strip out items checked off > 24 hours ago
     active_groceries = []
     needs_cleanup_save = False
     
@@ -298,6 +347,11 @@ with tabs[5]: # GROCERIES
                     continue
             except ValueError:
                 pass
+        
+        # Backwards compatibility for items that didn't have aisles
+        if "aisle" not in g:
+            g["aisle"] = "Other"
+            
         active_groceries.append(g)
         
     if needs_cleanup_save:
@@ -308,29 +362,33 @@ with tabs[5]: # GROCERIES
         
     g_df = pd.DataFrame(active_groceries)
     if g_df.empty:
-        g_df = pd.DataFrame(columns=["item", "checked", "time"])
+        g_df = pd.DataFrame(columns=["checked", "item", "aisle", "time"])
 
-    # Provide None for time to hide it from the user interface
+    # Categorical sorting logic so aisles group together neatly
+    g_df['aisle'] = pd.Categorical(g_df['aisle'], categories=AISLES, ordered=True)
+    g_df = g_df.sort_values(['checked', 'aisle', 'item']).reset_index(drop=True)
+
     edited_g = st.data_editor(
         g_df, 
         column_config={
-            "checked": st.column_config.CheckboxColumn("Done?", default=False),
-            "item": st.column_config.TextColumn("Item Name"),
-            "time": None 
+            "checked": st.column_config.CheckboxColumn("Done?", default=False, width="small"),
+            "item": st.column_config.TextColumn("Item Name", required=True),
+            "aisle": st.column_config.SelectboxColumn("Aisle", options=AISLES, default="Other", required=True),
+            "time": None # Hide timestamp from users
         },
         num_rows="dynamic",
         use_container_width=True,
+        hide_index=True,
         key="grocery_editor"
     )
     
     new_groceries = edited_g.to_dict('records')
     changes_detected = False
     
-    # Detect checkbox clicks to assign timestamps
     for i, row in enumerate(new_groceries):
         old_checked = False
-        if i < len(active_groceries):
-            old_checked = active_groceries[i].get("checked", False)
+        if i < len(g_df):
+            old_checked = g_df.iloc[i].get("checked", False)
             
         if row.get("checked") and not old_checked:
             row["time"] = now_time.isoformat()
@@ -338,9 +396,14 @@ with tabs[5]: # GROCERIES
         elif not row.get("checked") and old_checked:
             row["time"] = None
             changes_detected = True
+            
+        # Fix missing aisle on newly added blank rows
+        if pd.isna(row.get("aisle")):
+            row["aisle"] = "Other"
+            changes_detected = True
     
-    # Save automatically if text was typed, rows were added/deleted, or boxes were checked
-    if new_groceries != active_groceries or changes_detected:
+    # Save if actual changes occurred
+    if len(new_groceries) != len(active_groceries) or changes_detected or not edited_g.equals(g_df):
         d_up = load_data()
         d_up["groceries"] = new_groceries
         save_data(d_up)
