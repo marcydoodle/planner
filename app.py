@@ -6,8 +6,8 @@ import pytz
 import requests
 
 # --- CONFIG ---
-CATEGORIES = ["Mexican", "Asian", "Pasta", "Roast", "Caribbean"]
-AISLES = ["Produce", "Dairy & Fridge", "Meat & Seafood", "Pantry", "Frozen", "Household", "Other"]
+CATEGORIES = ["Scrounge", Mexican", "Asian", "Pasta", "Roast", "Caribbean"]
+AISLES = ["Produce", "Dairy & Fridge", "Vegan Meat", "Pantry", "Frozen", "Household", "The Weird Section in Big Y", "Other"]
 
 # Pull keys securely from Streamlit Cloud Secrets
 try:
@@ -63,10 +63,20 @@ def save_data(d):
     requests.put(BIN_URL, json=d, headers=headers)
 
 def calculate_streak(history_data):
-    """Calculates consecutive days where BOTH users submitted data."""
+    """Calculates consecutive days synced without unfairly resetting to 0 during the day."""
     streak = 0
-    check_date = get_local_now().date()
+    today = get_local_now().date()
     
+    # Check if today is already done
+    today_str = today.strftime("%Y-%m-%d")
+    if "Joy" in history_data.get(today_str, {}) and "Marcy" in history_data.get(today_str, {}):
+        streak += 1
+        check_date = today - timedelta(days=1)
+    else:
+        # If today isn't done yet, start counting backward from yesterday so the streak stays alive
+        check_date = today - timedelta(days=1)
+        
+    # Count backward continuously
     while True:
         date_str = check_date.strftime("%Y-%m-%d")
         day_data = history_data.get(date_str, {})
@@ -75,6 +85,7 @@ def calculate_streak(history_data):
             check_date -= timedelta(days=1)
         else:
             break
+            
     return streak
 
 # --- INITIALIZE ---
@@ -88,9 +99,20 @@ tomorrow_str = (now_dt + timedelta(days=1)).strftime("%Y-%m-%d")
 st.set_page_config(page_title="Joy & Marcy Sync", layout="wide", page_icon="🌙")
 st.title("🌙 The Daily Sync")
 
-# --- DINNER BANNER ---
+# --- DINNER & STREAK BANNER ---
 current_winner = st.session_state.data["history"].get(today_str, {}).get("dinner_winner", "TBD")
-st.info(f"### 🍴 Tonight's Dinner: {current_winner.upper()}")
+streak = calculate_streak(st.session_state.data["history"])
+
+# Create two columns at the top of the app
+banner_col1, banner_col2 = st.columns([3, 1])
+
+with banner_col1:
+    st.info(f"### 🍴 Tonight's Dinner: {current_winner.upper()}")
+
+with banner_col2:
+    with st.container(border=True):
+        st.metric(label="🔥 Sync Streak", value=f"{streak} Days")
+
 st.divider()
 
 # --- TABS ---
@@ -162,13 +184,12 @@ def decide_winner(date_key):
         m_score = m_v.get(c, 0) * w.get("Marcy", {}).get(c, 1.0)
         scores[c] = j_score + m_score
 
-        if any(scores.values()):
+    if any(scores.values()):
         win = max(scores, key=scores.get)
         
-        # Weight Adjustment: Reset winner to 1.0, increment others slightly based on unfulfilled votes
         for p in ["Joy", "Marcy"]:
             for c in CATEGORIES:
-                # 🚨 THE FIX: Ensure the category exists with a baseline of 1.0 before doing math
+                # Ensure the category exists in the dict before adding to it
                 if c not in d["weights"][p]:
                     d["weights"][p][c] = 1.0
                     
@@ -187,7 +208,6 @@ def decide_winner(date_key):
         st.rerun()
     else:
         st.error("No votes found! Go to Nightly Input first.")
-
 
 # --- TAB LOGIC ---
 
@@ -261,17 +281,13 @@ with tabs[2]: # INPUT
 
 with tabs[3]: # STANDINGS & INSIGHTS
     st.header("📊 Standings & Insights")
-    
-    # Streak Logic
-    streak = calculate_streak(st.session_state.data["history"])
-    st.metric(label="Current Sync Streak", value=f"{streak} Days", delta="Keep it up!" if streak > 0 else None)
+    st.write("The more you vote for something and *don't* get it, the higher your multiplier grows.")
     st.divider()
 
     col1, col2 = st.columns(2)
     
     with col1:
         st.subheader("Multiplier Status")
-        st.write("The more you vote for something and *don't* get it, the higher your multiplier grows.")
         display_data = []
         for c in CATEGORIES:
             display_data.append({
@@ -283,11 +299,9 @@ with tabs[3]: # STANDINGS & INSIGHTS
 
     with col2:
         st.subheader("Energy & Intensity (Last 14 Days)")
-        # Build Dataframe for charts
         chart_data = []
         hist = st.session_state.data["history"]
         
-        # Get last 14 days sorted
         recent_dates = sorted([d for d in hist.keys() if d <= today_str])[-14:]
         
         for d in recent_dates:
@@ -403,7 +417,6 @@ with tabs[5]: # GROCERIES
             row["time"] = None
             changes_detected = True
             
-        # Fix missing aisle on newly added blank rows
         if pd.isna(row.get("aisle")):
             row["aisle"] = "Other"
             changes_detected = True
