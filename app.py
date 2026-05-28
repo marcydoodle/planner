@@ -6,8 +6,8 @@ import pytz
 import requests
 
 # --- CONFIG ---
-CATEGORIES = ["Scrounge", "Mexican", "Asian", "Pasta", "Roast", "Caribbean"]
-AISLES = ["Produce", "Dairy & Fridge", "Vegan Meat", "Pantry", "Frozen", "Household", "The Weird Section in Big Y", "Other"]
+CATEGORIES = ["Mexican", "Asian", "Pasta", "Roast", "Caribbean","Scrounge"]
+AISLES = ["Produce", "Dairy & Fridge", "Vegan Meat", "Pantry", "Frozen", "Household", "Other"]
 
 # Pull keys securely from Streamlit Cloud Secrets
 try:
@@ -53,6 +53,10 @@ def load_data():
         if "Joy" not in d["weights"]: d["weights"]["Joy"] = {}
         if "Marcy" not in d["weights"]: d["weights"]["Marcy"] = {}
         
+    # Ensure custom write-in categories exist
+    if "custom_categories" not in d:
+        d["custom_categories"] = []
+        
     return d
 
 def save_data(d):
@@ -67,16 +71,13 @@ def calculate_streak(history_data):
     streak = 0
     today = get_local_now().date()
     
-    # Check if today is already done
     today_str = today.strftime("%Y-%m-%d")
     if "Joy" in history_data.get(today_str, {}) and "Marcy" in history_data.get(today_str, {}):
         streak += 1
         check_date = today - timedelta(days=1)
     else:
-        # If today isn't done yet, start counting backward from yesterday so the streak stays alive
         check_date = today - timedelta(days=1)
         
-    # Count backward continuously
     while True:
         date_str = check_date.strftime("%Y-%m-%d")
         day_data = history_data.get(date_str, {})
@@ -103,7 +104,6 @@ st.title("🌙 The Daily Sync")
 current_winner = st.session_state.data["history"].get(today_str, {}).get("dinner_winner", "TBD")
 streak = calculate_streak(st.session_state.data["history"])
 
-# Create two columns at the top of the app
 banner_col1, banner_col2 = st.columns([3, 1])
 
 with banner_col1:
@@ -177,9 +177,11 @@ def decide_winner(date_key):
     j_v = d["history"].get(date_key, {}).get("Joy", {}).get("votes", {})
     m_v = d["history"].get(date_key, {}).get("Marcy", {}).get("votes", {})
 
-    scores = {c: 0 for c in CATEGORIES}
+    # Active categories include base + any active custom write-ins
+    active_categories = CATEGORIES + d.get("custom_categories", [])
+    scores = {c: 0 for c in active_categories}
     
-    for c in CATEGORIES:
+    for c in active_categories:
         j_score = j_v.get(c, 0) * w.get("Joy", {}).get(c, 1.0)
         m_score = m_v.get(c, 0) * w.get("Marcy", {}).get(c, 1.0)
         scores[c] = j_score + m_score
@@ -188,8 +190,7 @@ def decide_winner(date_key):
         win = max(scores, key=scores.get)
         
         for p in ["Joy", "Marcy"]:
-            for c in CATEGORIES:
-                # Ensure the category exists in the dict before adding to it
+            for c in active_categories:
                 if c not in d["weights"][p]:
                     d["weights"][p][c] = 1.0
                     
@@ -198,6 +199,13 @@ def decide_winner(date_key):
                 else:
                     vote_amt = j_v.get(c, 0) if p == "Joy" else m_v.get(c, 0)
                     d["weights"][p][c] += round(vote_amt * 0.1, 2)
+
+        # Cleanup: If a custom write-in won, remove it from the active rotation
+        if win in d.get("custom_categories", []):
+            d["custom_categories"].remove(win)
+            # Remove its weight memory so it doesn't bloat the JSON
+            for p in ["Joy", "Marcy"]:
+                d["weights"][p].pop(win, None)
 
         if date_key not in d["history"]: d["history"][date_key] = {}
         d["history"][date_key]["dinner_winner"] = win
@@ -254,11 +262,22 @@ with tabs[2]: # INPUT
         nd = st.text_area("What do you need from your partner tomorrow?", key=f"nd_{user}")
 
         st.subheader("🍕 Dinner Votes (Max 10 Points Total)")
-        v_cols = st.columns(len(CATEGORIES))
-        v_res = {c: v_cols[i % len(CATEGORIES)].number_input(c, 0, 10, 0, key=f"vote_{c}_{user}") for i, c in enumerate(CATEGORIES)}
+        active_cats = CATEGORIES + st.session_state.data.get("custom_categories", [])
+        
+        # Display existing and active custom options across 4 columns
+        v_cols = st.columns(4)
+        v_res = {}
+        for i, c in enumerate(active_cats):
+            v_res[c] = v_cols[i % 4].number_input(c, 0, 10, 0, key=f"vote_{c}_{user}")
+            
+        st.write("---")
+        st.markdown("**Craving something else? Write in a new option:**")
+        w_col1, w_col2 = st.columns([3, 1])
+        new_cat_name = w_col1.text_input("New Suggestion", key=f"new_cat_{user}").strip().title()
+        new_cat_vote = w_col2.number_input("Votes for New Suggestion", 0, 10, 0, key=f"new_vote_{user}")
 
         if st.form_submit_button("Submit Sync"):
-            total_votes = sum(v_res.values())
+            total_votes = sum(v_res.values()) + new_cat_vote
             
             if total_votes > 10:
                 st.error(f"⚠️ You used {total_votes} points. Please adjust your votes to a maximum of 10 points and try again!")
@@ -266,6 +285,15 @@ with tabs[2]: # INPUT
                 with st.spinner("Syncing to cloud..."):
                     d_up = load_data()
                     if t_key not in d_up["history"]: d_up["history"][t_key] = {}
+                    
+                    # Handle new write-in category
+                    if new_cat_name and new_cat_vote > 0:
+                        if new_cat_name not in active_cats:
+                            d_up["custom_categories"].append(new_cat_name)
+                            d_up["weights"]["Joy"][new_cat_name] = 1.0
+                            d_up["weights"]["Marcy"][new_cat_name] = 1.0
+                        # Inject the write-in vote into the results so it counts
+                        v_res[new_cat_name] = v_res.get(new_cat_name, 0) + new_cat_vote
                     
                     entry = {"energy": nrg, "after": aft, "reminders": rem, "need": nd, "votes": v_res}
                     if user == "Joy": entry.update({"work": w_t, "mtg": w_m, "intensity": w_i})
@@ -289,7 +317,8 @@ with tabs[3]: # STANDINGS & INSIGHTS
     with col1:
         st.subheader("Multiplier Status")
         display_data = []
-        for c in CATEGORIES:
+        active_cats = CATEGORIES + st.session_state.data.get("custom_categories", [])
+        for c in active_cats:
             display_data.append({
                 "Category": c, 
                 "Joy Multiplier": f"{st.session_state.data['weights']['Joy'].get(c, 1.0):.2f}x",
@@ -368,7 +397,6 @@ with tabs[5]: # GROCERIES
             except ValueError:
                 pass
         
-        # Backwards compatibility for items that didn't have aisles
         if "aisle" not in g:
             g["aisle"] = "Other"
             
@@ -384,7 +412,6 @@ with tabs[5]: # GROCERIES
     if g_df.empty:
         g_df = pd.DataFrame(columns=["checked", "item", "aisle", "time"])
 
-    # Categorical sorting logic so aisles group together neatly
     g_df['aisle'] = pd.Categorical(g_df['aisle'], categories=AISLES, ordered=True)
     g_df = g_df.sort_values(['checked', 'aisle', 'item']).reset_index(drop=True)
 
@@ -394,7 +421,7 @@ with tabs[5]: # GROCERIES
             "checked": st.column_config.CheckboxColumn("Done?", default=False, width="small"),
             "item": st.column_config.TextColumn("Item Name", required=True),
             "aisle": st.column_config.SelectboxColumn("Aisle", options=AISLES, default="Other", required=True),
-            "time": None # Hide timestamp from users
+            "time": None 
         },
         num_rows="dynamic",
         use_container_width=True,
@@ -421,7 +448,6 @@ with tabs[5]: # GROCERIES
             row["aisle"] = "Other"
             changes_detected = True
     
-    # Save if actual changes occurred
     if len(new_groceries) != len(active_groceries) or changes_detected or not edited_g.equals(g_df):
         d_up = load_data()
         d_up["groceries"] = new_groceries
