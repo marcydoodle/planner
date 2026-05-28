@@ -6,8 +6,8 @@ import pytz
 import requests
 
 # --- CONFIG ---
-CATEGORIES = ["Mexican", "Asian", "Pasta", "Roast", "Caribbean","Scrounge"]
-AISLES = ["Produce", "Dairy & Fridge", "Vegan Meat", "Pantry", "Frozen", "Household", "Other"]
+CATEGORIES = ["Mexican", "Asian", "Pasta", "Roast", "Caribbean", "Scrounge"]
+AISLES = ["Produce", "Dairy & Fridge", "Vegan Meat", "Pantry", "Frozen", "Household", "Other", "Weird Big Y Section"]
 
 # Pull keys securely from Streamlit Cloud Secrets
 try:
@@ -116,7 +116,7 @@ with banner_col2:
 st.divider()
 
 # --- TABS ---
-tabs = st.tabs(["📅 Today", "📋 Tomorrow", "📝 Nightly Input", "📊 Standings & Insights", "🗓 Future Planner", "🛒 Groceries", "📜 History"])
+tabs = st.tabs(["📅 Today", "📋 Tomorrow", "📝 Nightly Input", "📊 Standings", "🗓 Future Planner", "🛒 Groceries", "📜 History"])
 
 def render_rundown(date_key, label):
     d = st.session_state.data
@@ -307,44 +307,21 @@ with tabs[2]: # INPUT
                 st.toast(f"Sync Saved securely for {user}! 🌙", icon="✅")
                 st.rerun()
 
-with tabs[3]: # STANDINGS & INSIGHTS
-    st.header("📊 Standings & Insights")
+with tabs[3]: # STANDINGS
+    st.header("📊 Standings")
     st.write("The more you vote for something and *don't* get it, the higher your multiplier grows.")
     st.divider()
 
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("Multiplier Status")
-        display_data = []
-        active_cats = CATEGORIES + st.session_state.data.get("custom_categories", [])
-        for c in active_cats:
-            display_data.append({
-                "Category": c, 
-                "Joy Multiplier": f"{st.session_state.data['weights']['Joy'].get(c, 1.0):.2f}x",
-                "Marcy Multiplier": f"{st.session_state.data['weights']['Marcy'].get(c, 1.0):.2f}x"
-            })
-        st.dataframe(pd.DataFrame(display_data), hide_index=True)
-
-    with col2:
-        st.subheader("Energy & Intensity (Last 14 Days)")
-        chart_data = []
-        hist = st.session_state.data["history"]
-        
-        recent_dates = sorted([d for d in hist.keys() if d <= today_str])[-14:]
-        
-        for d in recent_dates:
-            chart_data.append({
-                "Date": d,
-                "Joy's Work Intensity": hist[d].get("Joy", {}).get("intensity", 5),
-                "Marcy's Energy": hist[d].get("Marcy", {}).get("energy", 5)
-            })
-            
-        if chart_data:
-            df_chart = pd.DataFrame(chart_data).set_index("Date")
-            st.line_chart(df_chart, color=["#FF4B4B", "#0068C9"])
-        else:
-            st.info("Not enough data to graph yet!")
+    st.subheader("Multiplier Status")
+    display_data = []
+    active_cats = CATEGORIES + st.session_state.data.get("custom_categories", [])
+    for c in active_cats:
+        display_data.append({
+            "Category": c, 
+            "Joy Multiplier": f"{st.session_state.data['weights']['Joy'].get(c, 1.0):.2f}x",
+            "Marcy Multiplier": f"{st.session_state.data['weights']['Marcy'].get(c, 1.0):.2f}x"
+        })
+    st.dataframe(pd.DataFrame(display_data), hide_index=True)
 
 with tabs[4]: # FUTURE PLANNER
     st.header("🗓 Appointment Planner")
