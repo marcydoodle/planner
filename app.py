@@ -162,11 +162,16 @@ def decide_winner(date_key):
         m_score = m_v.get(c, 0) * w.get("Marcy", {}).get(c, 1.0)
         scores[c] = j_score + m_score
 
-    if any(scores.values()):
+        if any(scores.values()):
         win = max(scores, key=scores.get)
         
+        # Weight Adjustment: Reset winner to 1.0, increment others slightly based on unfulfilled votes
         for p in ["Joy", "Marcy"]:
             for c in CATEGORIES:
+                # 🚨 THE FIX: Ensure the category exists with a baseline of 1.0 before doing math
+                if c not in d["weights"][p]:
+                    d["weights"][p][c] = 1.0
+                    
                 if c == win:
                     d["weights"][p][c] = 1.0
                 else:
@@ -182,6 +187,7 @@ def decide_winner(date_key):
         st.rerun()
     else:
         st.error("No votes found! Go to Nightly Input first.")
+
 
 # --- TAB LOGIC ---
 
