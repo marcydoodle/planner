@@ -6,7 +6,7 @@ import pytz
 import requests
 
 # --- CONFIG ---
-CATEGORIES = ["Scrounge", Mexican", "Asian", "Pasta", "Roast", "Caribbean"]
+CATEGORIES = ["Scrounge", "Mexican", "Asian", "Pasta", "Roast", "Caribbean"]
 AISLES = ["Produce", "Dairy & Fridge", "Vegan Meat", "Pantry", "Frozen", "Household", "The Weird Section in Big Y", "Other"]
 
 # Pull keys securely from Streamlit Cloud Secrets
